@@ -195,15 +195,42 @@ void MonsterDatabase::LoadDefaultMonsters() {
     // Default RF Online monsters (example colors)
     MonsterInfo monster;
     
-    // Bellato monsters (Blue-ish)
-    monster.name = "Bellato_Accretian";
-    monster.color = { 50, 100, 200, 45, "Blue" };
-    monster.priority = 5;
+    // Monster Biru (Blue monsters) - dari screenshot, monster berwarna biru glowing
+    // Warna biru untuk monster detection (view dari atas)
+    monster.name = "Blue_Monster";
+    monster.color = { 51, 205, 252, 50, "Blue" };  // #33CDFC - warna biru glowing
+    monster.priority = 1;  // High priority untuk monster biru
     monster.aggressive = true;
     monster.hpBarOffset = 50;
     monster.estimatedHP = 1000;
     monster.expReward = 500;
     monster.ignore = false;
+    monsters[monster.name] = monster;
+    allColors.push_back(monster.color);
+    
+    // Variasi warna biru lainnya untuk deteksi yang lebih baik
+    monster.name = "Blue_Monster_Light";
+    monster.color = { 97, 213, 251, 50, "LightBlue" };  // #61D5FB - light blue
+    monster.priority = 1;
+    monsters[monster.name] = monster;
+    allColors.push_back(monster.color);
+    
+    monster.name = "Blue_Monster_VeryLight";
+    monster.color = { 147, 231, 252, 50, "VeryLightBlue" };  // #93E7FC - very light blue
+    monster.priority = 1;
+    monsters[monster.name] = monster;
+    allColors.push_back(monster.color);
+    
+    monster.name = "Blue_Monster_Dark";
+    monster.color = { 36, 123, 202, 50, "DarkBlue" };  // #247BCA - dark blue
+    monster.priority = 1;
+    monsters[monster.name] = monster;
+    allColors.push_back(monster.color);
+    
+    // Bellato monsters (Blue-ish) - fallback
+    monster.name = "Bellato_Accretian";
+    monster.color = { 50, 100, 200, 45, "Blue" };
+    monster.priority = 5;
     monsters[monster.name] = monster;
     allColors.push_back(monster.color);
     
@@ -1475,20 +1502,26 @@ void MonsterFinderBot::ScanAndTarget() {
             int clickX = offsetX + target.centerX;
             int clickY = offsetY + target.centerY;
             
+            // STEP 1: Klik kiri untuk SELECT monster (warna biru)
+            // Bot akan klik pada monster biru yang terdeteksi untuk select
+            logger.Info("Selecting monster: " + target.monsterName + " at (" + 
+                       to_string(clickX) + ", " + to_string(clickY) + ")");
+            
             // Follow ESP path jika enabled
             if (config.enablePathfinding) {
                 FollowESPPath(target);
             } else {
-                // Direct click ke game window (background, tidak mengganggu user)
+                // Direct click kiri ke game window untuk select monster
                 inputManager->Click(clickX, clickY);
             }
             
+            // Delay setelah select untuk memastikan monster ter-select
             Sleep(ApplyRandomDelay(config.attackDelayMs));
             
-            // Attack dengan press "Spasi" (VK_SPACE)
+            // STEP 2: Press "Spasi" untuk ATTACK monster yang sudah di-select
             // Pastikan selalu menggunakan Spasi untuk attack
             inputManager->KeyPress(VK_SPACE);
-            logger.Debug("Attacking with SPACE key");
+            logger.Info("Attacking selected monster with SPACE key");
             
             currentTarget = target;
             isAttacking = true;
