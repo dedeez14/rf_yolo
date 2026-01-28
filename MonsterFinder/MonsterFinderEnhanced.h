@@ -126,6 +126,15 @@ struct BotConfig {
     int detectionSensitivity; // Detection sensitivity: 1=low, 2=medium, 3=high
     bool adaptiveThresholds; // Auto-adjust thresholds based on conditions
     int confidenceLevel;       // Detection confidence: 1-10
+    
+    // Cursor-based detection
+    bool useCursorDetection;  // Use cursor color detection (red = monster)
+    int cursorRedThreshold;   // Red threshold for cursor detection (default: 180)
+    int cursorGreenMax;       // Max green for red cursor (default: 100)
+    int cursorBlueMax;        // Max blue for red cursor (default: 100)
+    bool autoPressX;          // Auto-press X key every 2 seconds
+    int autoPressXInterval;   // Interval in ms for auto-press X (default: 2000)
+    WORD autoPressXKey;       // Key code for auto-press (default: 'X')
 };
 
 struct Statistics {
@@ -473,6 +482,8 @@ public:
     void BotLoop();
     void ScanAndTarget();
     void AttackTarget();
+    bool GetCursorColor(int& r, int& g, int& b);  // Get color at cursor position
+    bool IsCursorRed();  // Check if cursor is red (monster detected)
     void CheckPlayerHP();
     void UsePotions();
     void AutoLoot();

@@ -527,6 +527,15 @@ void ConfigManager::ResetToDefaults() {
     config.detectionSensitivity = 2; // Medium detection sensitivity
     config.adaptiveThresholds = false; // Disable by default
     config.confidenceLevel = 5;      // Medium confidence
+    
+    // Cursor-based detection (ENABLED by default for auto-attack)
+    config.useCursorDetection = true;  // Enable cursor color detection
+    config.cursorRedThreshold = 180;   // Red threshold for cursor detection
+    config.cursorGreenMax = 100;       // Max green for red cursor
+    config.cursorBlueMax = 100;        // Max blue for red cursor
+    config.autoPressX = true;          // Auto-press X every 2 seconds
+    config.autoPressXInterval = 2000;  // 2 seconds interval
+    config.autoPressXKey = 'X';        // X key code
 }
 
 void ConfigManager::LoadConfig(const string& path) {
@@ -574,6 +583,20 @@ void ConfigManager::LoadConfig(const string& path) {
         else if (key == "autoSkill") config.autoSkill = (value == "1" || value == "true");
         else if (key == "chainAttack") config.chainAttack = (value == "1" || value == "true");
         else if (key == "onlyAggressive") config.onlyAggressive = (value == "1" || value == "true");
+        else if (key == "useCursorDetection") config.useCursorDetection = (value == "1" || value == "true");
+        else if (key == "cursorRedThreshold") config.cursorRedThreshold = stoi(value);
+        else if (key == "cursorGreenMax") config.cursorGreenMax = stoi(value);
+        else if (key == "cursorBlueMax") config.cursorBlueMax = stoi(value);
+        else if (key == "autoPressX") config.autoPressX = (value == "1" || value == "true");
+        else if (key == "autoPressXInterval") config.autoPressXInterval = stoi(value);
+        else if (key == "autoPressXKey") {
+            if (value.length() == 1) {
+                config.autoPressXKey = toupper(value[0]);
+            } else {
+                // Try to parse as virtual key code
+                config.autoPressXKey = (WORD)stoi(value);
+            }
+        }
         // ... add more config parsing as needed
     }
     
@@ -1076,8 +1099,12 @@ void MonsterFinderBot::Resume() {
 }
 
 void MonsterFinderBot::BotLoop() {
+    static DWORD lastAutoPressX = 0;
+    
     while (isRunning) {
         if (!isPaused) {
+            DWORD currentTime = GetTickCount();
+            
             // Check hotkeys
             CheckHotkeys();
             
@@ -1099,9 +1126,19 @@ void MonsterFinderBot::BotLoop() {
                 AutoLoot();
             }
             
+            // Auto-press X key setiap interval (default: setiap 2 detik)
+            if (config.autoPressX) {
+                if (currentTime - lastAutoPressX > config.autoPressXInterval) {
+                    inputManager->KeyPress(config.autoPressXKey);
+                    lastAutoPressX = currentTime;
+                    if (config.debugDetection) {
+                        logger.Debug("Auto-pressed X key");
+                    }
+                }
+            }
+            
             // Always scan to update tracked monsters (even when attacking)
             // This ensures boxes follow monster movement
-            DWORD currentTime = GetTickCount();
             // Scan more frequently when not attacking to find new targets faster
             DWORD scanInterval = isAttacking ? 200 : 100;  // 200ms when attacking, 100ms when idle
             if (currentTime - lastScanTime > scanInterval || lastScanTime == 0) {
@@ -1323,7 +1360,34 @@ void MonsterFinderBot::ScanAndTarget() {
     // Prevent spam logging - hanya log setiap 2 detik jika tidak ada monster
     bool shouldLog = (currentTime - lastNoMonsterLogTime > 2000);
     
-    // Select target from tracked monsters (yang sudah di-update oleh BotLoop)
+    // CURSOR-BASED DETECTION: Jika cursor merah = monster, langsung attack tanpa click
+    if (config.useCursorDetection) {
+        if (IsCursorRed()) {
+            // Cursor merah = monster terdeteksi, langsung attack
+            if (!isAttacking) {
+                // Focus game window
+                if (GetForegroundWindow() != gameWindow) {
+                    ShowWindow(gameWindow, SW_RESTORE);
+                    SetForegroundWindow(gameWindow);
+                    Sleep(50);
+                }
+                
+                // Langsung attack tanpa click (cursor sudah di monster)
+                inputManager->KeyPress(VK_SPACE);
+                
+                isAttacking = true;
+                attackStartTime = GetTickCount();
+                
+                if (shouldLog) {
+                    logger.Info("Cursor red detected - Auto attacking monster!");
+                    lastNoMonsterLogTime = currentTime;
+                }
+            }
+            return; // Skip normal targeting logic
+        }
+    }
+    
+    // NORMAL TARGETING: Select target from tracked monsters (yang sudah di-update oleh BotLoop)
     if (!detectedBoxes.empty()) {
         // Filter out dead monsters
         vector<BoundingBox> aliveBoxes;
@@ -1365,24 +1429,27 @@ void MonsterFinderBot::ScanAndTarget() {
                 Sleep(50);
             }
             
-            // Get click position
-            RECT rect;
-            GetClientRect(gameWindow, &rect);
-            int offsetX = (rect.right - rect.left) / 2 - config.scanWidth / 2;
-            int offsetY = (rect.bottom - rect.top) / 2 - config.scanHeight / 2;
-            
-            int clickX = offsetX + target.centerX;
-            int clickY = offsetY + target.centerY;
-            
-            // Follow ESP path jika enabled
-            if (config.enablePathfinding) {
-                FollowESPPath(target);
-            } else {
-                // Direct click
-                inputManager->Click(clickX, clickY);
+            // Jika cursor detection enabled, tidak perlu click manual
+            if (!config.useCursorDetection) {
+                // Get click position
+                RECT rect;
+                GetClientRect(gameWindow, &rect);
+                int offsetX = (rect.right - rect.left) / 2 - config.scanWidth / 2;
+                int offsetY = (rect.bottom - rect.top) / 2 - config.scanHeight / 2;
+                
+                int clickX = offsetX + target.centerX;
+                int clickY = offsetY + target.centerY;
+                
+                // Follow ESP path jika enabled
+                if (config.enablePathfinding) {
+                    FollowESPPath(target);
+                } else {
+                    // Direct click
+                    inputManager->Click(clickX, clickY);
+                }
+                
+                Sleep(ApplyRandomDelay(config.attackDelayMs));
             }
-            
-            Sleep(ApplyRandomDelay(config.attackDelayMs));
             
             // Attack
             inputManager->KeyPress(VK_SPACE);
@@ -1576,6 +1643,51 @@ BoundingBox MonsterFinderBot::SelectTarget(const vector<BoundingBox>& candidates
     }
     
     return sorted[0];
+}
+
+bool MonsterFinderBot::GetCursorColor(int& r, int& g, int& b) {
+    POINT cursorPos;
+    if (!GetCursorPos(&cursorPos)) {
+        return false;
+    }
+    
+    // Convert screen coordinates to client coordinates
+    if (gameWindow == NULL) {
+        return false;
+    }
+    
+    POINT clientPos = cursorPos;
+    ScreenToClient(gameWindow, &clientPos);
+    
+    // Get window rect to calculate offset
+    RECT rect;
+    GetClientRect(gameWindow, &rect);
+    int offsetX = (rect.right - rect.left) / 2 - config.scanWidth / 2;
+    int offsetY = (rect.bottom - rect.top) / 2 - config.scanHeight / 2;
+    
+    // Adjust cursor position relative to scan area
+    int scanX = clientPos.x - offsetX;
+    int scanY = clientPos.y - offsetY;
+    
+    // Check if cursor is within scan area
+    if (scanX < 0 || scanX >= config.scanWidth || scanY < 0 || scanY >= config.scanHeight) {
+        return false;
+    }
+    
+    // Get pixel color from scanner
+    return scanner->GetPixel(scanX, scanY, r, g, b);
+}
+
+bool MonsterFinderBot::IsCursorRed() {
+    int r, g, b;
+    if (!GetCursorColor(r, g, b)) {
+        return false;
+    }
+    
+    // Check if cursor is red (R high, G and B low)
+    return (r >= config.cursorRedThreshold && 
+            g <= config.cursorGreenMax && 
+            b <= config.cursorBlueMax);
 }
 
 bool MonsterFinderBot::IsMonsterAlive(const BoundingBox& box) {
