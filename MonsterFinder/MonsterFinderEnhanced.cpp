@@ -528,12 +528,12 @@ void ConfigManager::ResetToDefaults() {
     config.adaptiveThresholds = false; // Disable by default
     config.confidenceLevel = 5;      // Medium confidence
     
-    // Cursor-based detection (ENABLED by default for auto-attack)
-    config.useCursorDetection = true;  // Enable cursor color detection
+    // Cursor-based detection (DISABLED by default - bot mencari monster sendiri)
+    config.useCursorDetection = false; // Disabled - bot mencari monster otomatis tanpa cursor
     config.cursorRedThreshold = 180;   // Red threshold for cursor detection
     config.cursorGreenMax = 100;       // Max green for red cursor
     config.cursorBlueMax = 100;        // Max blue for red cursor
-    config.autoPressX = true;          // Auto-press X every 2 seconds
+    config.autoPressX = true;          // Auto-press X every 2 seconds (background)
     config.autoPressXInterval = 2000;  // 2 seconds interval
     config.autoPressXKey = 'X';        // X key code
 }
@@ -825,6 +825,10 @@ int InputManager::GetRandomDeviation() {
 }
 
 void InputManager::Click(int x, int y) {
+    // Save current mouse position to restore later (tidak mengganggu user)
+    POINT savedPos;
+    GetCursorPos(&savedPos);
+    
     int deviation = GetRandomDeviation();
     int targetX = x + deviation;
     int targetY = y + deviation;
@@ -834,7 +838,7 @@ void InputManager::Click(int x, int y) {
     
     INPUT inputs[4] = {};
     
-    // Move mouse
+    // Move mouse to target (relative move untuk tidak mengganggu)
     inputs[0].type = INPUT_MOUSE;
     inputs[0].mi.dx = (pt.x * 65535) / GetSystemMetrics(SM_CXSCREEN);
     inputs[0].mi.dy = (pt.y * 65535) / GetSystemMetrics(SM_CYSCREEN);
@@ -851,15 +855,24 @@ void InputManager::Click(int x, int y) {
     SendInput(3, inputs, sizeof(INPUT));
     
     Sleep(GetRandomClickDelay());
+    
+    // Restore original mouse position (tidak mengganggu user)
+    SetCursorPos(savedPos.x, savedPos.y);
 }
 
 void InputManager::KeyPress(WORD key) {
+    // Background operation: Send input tanpa mengambil focus dari user
+    // Gunakan SendInput dengan cara yang tidak mengganggu keyboard user
     INPUT inputs[2] = {};
     inputs[0].type = INPUT_KEYBOARD;
     inputs[0].ki.wVk = key;
+    inputs[0].ki.dwFlags = 0; // Key down
     inputs[1].type = INPUT_KEYBOARD;
     inputs[1].ki.wVk = key;
     inputs[1].ki.dwFlags = KEYEVENTF_KEYUP;
+    
+    // SendInput akan mengirim ke foreground window, tapi kita tidak mengambil focus
+    // User masih bisa menggunakan keyboard/mouse mereka
     SendInput(2, inputs, sizeof(INPUT));
 }
 
@@ -1360,34 +1373,8 @@ void MonsterFinderBot::ScanAndTarget() {
     // Prevent spam logging - hanya log setiap 2 detik jika tidak ada monster
     bool shouldLog = (currentTime - lastNoMonsterLogTime > 2000);
     
-    // CURSOR-BASED DETECTION: Jika cursor merah = monster, langsung attack tanpa click
-    if (config.useCursorDetection) {
-        if (IsCursorRed()) {
-            // Cursor merah = monster terdeteksi, langsung attack
-            if (!isAttacking) {
-                // Focus game window
-                if (GetForegroundWindow() != gameWindow) {
-                    ShowWindow(gameWindow, SW_RESTORE);
-                    SetForegroundWindow(gameWindow);
-                    Sleep(50);
-                }
-                
-                // Langsung attack tanpa click (cursor sudah di monster)
-                inputManager->KeyPress(VK_SPACE);
-                
-                isAttacking = true;
-                attackStartTime = GetTickCount();
-                
-                if (shouldLog) {
-                    logger.Info("Cursor red detected - Auto attacking monster!");
-                    lastNoMonsterLogTime = currentTime;
-                }
-            }
-            return; // Skip normal targeting logic
-        }
-    }
-    
-    // NORMAL TARGETING: Select target from tracked monsters (yang sudah di-update oleh BotLoop)
+    // AUTO TARGETING: Bot mencari monster sendiri tanpa perlu cursor diarahkan
+    // Select target from tracked monsters (yang sudah di-update oleh BotLoop)
     if (!detectedBoxes.empty()) {
         // Filter out dead monsters
         vector<BoundingBox> aliveBoxes;
@@ -1422,36 +1409,26 @@ void MonsterFinderBot::ScanAndTarget() {
                 }
             }
             
-            // Focus game window
-            if (GetForegroundWindow() != gameWindow) {
-                ShowWindow(gameWindow, SW_RESTORE);
-                SetForegroundWindow(gameWindow);
-                Sleep(50);
+            // Get click position (relative to game window)
+            RECT rect;
+            GetClientRect(gameWindow, &rect);
+            int offsetX = (rect.right - rect.left) / 2 - config.scanWidth / 2;
+            int offsetY = (rect.bottom - rect.top) / 2 - config.scanHeight / 2;
+            
+            int clickX = offsetX + target.centerX;
+            int clickY = offsetY + target.centerY;
+            
+            // Follow ESP path jika enabled
+            if (config.enablePathfinding) {
+                FollowESPPath(target);
+            } else {
+                // Direct click ke game window (background, tidak mengganggu user)
+                inputManager->Click(clickX, clickY);
             }
             
-            // Jika cursor detection enabled, tidak perlu click manual
-            if (!config.useCursorDetection) {
-                // Get click position
-                RECT rect;
-                GetClientRect(gameWindow, &rect);
-                int offsetX = (rect.right - rect.left) / 2 - config.scanWidth / 2;
-                int offsetY = (rect.bottom - rect.top) / 2 - config.scanHeight / 2;
-                
-                int clickX = offsetX + target.centerX;
-                int clickY = offsetY + target.centerY;
-                
-                // Follow ESP path jika enabled
-                if (config.enablePathfinding) {
-                    FollowESPPath(target);
-                } else {
-                    // Direct click
-                    inputManager->Click(clickX, clickY);
-                }
-                
-                Sleep(ApplyRandomDelay(config.attackDelayMs));
-            }
+            Sleep(ApplyRandomDelay(config.attackDelayMs));
             
-            // Attack
+            // Attack (background, tidak mengganggu user)
             inputManager->KeyPress(VK_SPACE);
             
             currentTarget = target;
@@ -1643,51 +1620,6 @@ BoundingBox MonsterFinderBot::SelectTarget(const vector<BoundingBox>& candidates
     }
     
     return sorted[0];
-}
-
-bool MonsterFinderBot::GetCursorColor(int& r, int& g, int& b) {
-    POINT cursorPos;
-    if (!GetCursorPos(&cursorPos)) {
-        return false;
-    }
-    
-    // Convert screen coordinates to client coordinates
-    if (gameWindow == NULL) {
-        return false;
-    }
-    
-    POINT clientPos = cursorPos;
-    ScreenToClient(gameWindow, &clientPos);
-    
-    // Get window rect to calculate offset
-    RECT rect;
-    GetClientRect(gameWindow, &rect);
-    int offsetX = (rect.right - rect.left) / 2 - config.scanWidth / 2;
-    int offsetY = (rect.bottom - rect.top) / 2 - config.scanHeight / 2;
-    
-    // Adjust cursor position relative to scan area
-    int scanX = clientPos.x - offsetX;
-    int scanY = clientPos.y - offsetY;
-    
-    // Check if cursor is within scan area
-    if (scanX < 0 || scanX >= config.scanWidth || scanY < 0 || scanY >= config.scanHeight) {
-        return false;
-    }
-    
-    // Get pixel color from scanner
-    return scanner->GetPixel(scanX, scanY, r, g, b);
-}
-
-bool MonsterFinderBot::IsCursorRed() {
-    int r, g, b;
-    if (!GetCursorColor(r, g, b)) {
-        return false;
-    }
-    
-    // Check if cursor is red (R high, G and B low)
-    return (r >= config.cursorRedThreshold && 
-            g <= config.cursorGreenMax && 
-            b <= config.cursorBlueMax);
 }
 
 bool MonsterFinderBot::IsMonsterAlive(const BoundingBox& box) {

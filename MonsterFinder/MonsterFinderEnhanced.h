@@ -482,8 +482,6 @@ public:
     void BotLoop();
     void ScanAndTarget();
     void AttackTarget();
-    bool GetCursorColor(int& r, int& g, int& b);  // Get color at cursor position
-    bool IsCursorRed();  // Check if cursor is red (monster detected)
     void CheckPlayerHP();
     void UsePotions();
     void AutoLoot();
