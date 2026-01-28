@@ -116,6 +116,9 @@ struct BotConfig {
     bool showBoxes;
     bool showOverlay;
     bool showDebugInfo;
+    bool showESPLines;        // Show ESP lines from player to monsters
+    bool enablePathfinding;   // Enable pathfinding following ESP lines
+    int maxESPLines;          // Maximum ESP lines to show (prioritize nearest)
 };
 
 struct Statistics {
@@ -496,6 +499,13 @@ private:
     DWORD ApplyRandomDelay(DWORD baseDelay);
     bool CheckHotkeys();
     void HandleHotkey(HotkeyAction action);
+    
+    // ESP Line & Pathfinding functions
+    void DrawESPLines(HDC hdc, int offsetX, int offsetY);
+    COLORREF GetESPLineColor(const BoundingBox& monster, int index);
+    vector<BoundingBox> SortMonstersByDistance(const vector<BoundingBox>& monsters);
+    void FollowESPPath(const BoundingBox& target);
+    vector<POINT> CalculatePathPoints(int startX, int startY, int endX, int endY);
     
     // Tracking functions
     int MatchMonsterToTracked(const BoundingBox& newBox);

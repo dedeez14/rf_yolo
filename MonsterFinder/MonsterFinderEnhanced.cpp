@@ -517,6 +517,9 @@ void ConfigManager::ResetToDefaults() {
     config.showBoxes = true;
     config.showOverlay = true;
     config.showDebugInfo = false;
+    config.showESPLines = true;      // Enable ESP lines by default
+    config.enablePathfinding = true; // Enable pathfinding by default
+    config.maxESPLines = 10;         // Show max 10 nearest monsters
 }
 
 void ConfigManager::LoadConfig(const string& path) {
@@ -1318,8 +1321,14 @@ void MonsterFinderBot::ScanAndTarget() {
             int clickX = offsetX + target.centerX;
             int clickY = offsetY + target.centerY;
             
-            // Click target
-            inputManager->Click(clickX, clickY);
+            // Follow ESP path jika enabled
+            if (config.enablePathfinding) {
+                FollowESPPath(target);
+            } else {
+                // Direct click
+                inputManager->Click(clickX, clickY);
+            }
+            
             Sleep(ApplyRandomDelay(config.attackDelayMs));
             
             // Attack
@@ -1463,10 +1472,11 @@ BoundingBox MonsterFinderBot::SelectTarget(const vector<BoundingBox>& candidates
         return empty;
     }
     
-    // Sort based on target mode
+    // Sort berdasarkan target mode dengan prioritas jarak terdekat
     vector<BoundingBox> sorted = candidates;
     
-    if (config.targetMode == "nearest") {
+    if (config.targetMode == "nearest" || config.enablePathfinding) {
+        // Prioritaskan monster terdekat untuk ESP line dan pathfinding
         sort(sorted.begin(), sorted.end(), 
              [](const BoundingBox& a, const BoundingBox& b) {
                  return a.distToCenter < b.distToCenter;
@@ -1476,6 +1486,23 @@ BoundingBox MonsterFinderBot::SelectTarget(const vector<BoundingBox>& candidates
              [](const BoundingBox& a, const BoundingBox& b) {
                  if (a.priority != b.priority) {
                      return a.priority < b.priority;
+                 }
+                 // Jika priority sama, pilih yang terdekat
+                 return a.distToCenter < b.distToCenter;
+             });
+    } else if (config.targetMode == "weakest") {
+        sort(sorted.begin(), sorted.end(), 
+             [](const BoundingBox& a, const BoundingBox& b) {
+                 if (a.estimatedHP != b.estimatedHP) {
+                     return a.estimatedHP < b.estimatedHP;
+                 }
+                 return a.distToCenter < b.distToCenter;
+             });
+    } else if (config.targetMode == "strongest") {
+        sort(sorted.begin(), sorted.end(), 
+             [](const BoundingBox& a, const BoundingBox& b) {
+                 if (a.estimatedHP != b.estimatedHP) {
+                     return a.estimatedHP > b.estimatedHP;
                  }
                  return a.distToCenter < b.distToCenter;
              });
@@ -1538,8 +1565,173 @@ void MonsterFinderBot::DrawBoundingBox(HDC hdc, const BoundingBox& box, COLORREF
     DeleteObject(hPen);
 }
 
+vector<BoundingBox> MonsterFinderBot::SortMonstersByDistance(const vector<BoundingBox>& monsters) {
+    // Sort monsters by distance to player (center of screen)
+    vector<BoundingBox> sorted = monsters;
+    
+    sort(sorted.begin(), sorted.end(),
+        [this](const BoundingBox& a, const BoundingBox& b) {
+            return a.distToCenter < b.distToCenter;
+        });
+    
+    return sorted;
+}
+
+COLORREF MonsterFinderBot::GetESPLineColor(const BoundingBox& monster, int index) {
+    // Color berdasarkan priority dan jarak
+    // Nearest = Bright Green, Medium = Yellow, Far = Red
+    
+    if (index == 0) {
+        return RGB(0, 255, 0);  // Bright green for nearest
+    } else if (index < 3) {
+        return RGB(255, 255, 0);  // Yellow for top 3
+    } else if (index < 5) {
+        return RGB(255, 165, 0);  // Orange for top 5
+    } else {
+        return RGB(255, 0, 0);  // Red for others
+    }
+}
+
+vector<POINT> MonsterFinderBot::CalculatePathPoints(int startX, int startY, int endX, int endY) {
+    // Calculate path points following ESP line
+    // Simple linear interpolation dengan beberapa waypoints
+    vector<POINT> path;
+    
+    int steps = max(5, (int)sqrt(pow(endX - startX, 2) + pow(endY - startY, 2)) / 20);
+    
+    for (int i = 0; i <= steps; i++) {
+        double t = (double)i / steps;
+        POINT pt;
+        pt.x = (int)(startX + (endX - startX) * t);
+        pt.y = (int)(startY + (endY - startY) * t);
+        path.push_back(pt);
+    }
+    
+    return path;
+}
+
+void MonsterFinderBot::FollowESPPath(const BoundingBox& target) {
+    // Follow ESP line path untuk attack monster
+    if (!config.enablePathfinding) {
+        return;
+    }
+    
+    RECT rect;
+    GetClientRect(gameWindow, &rect);
+    int offsetX = (rect.right - rect.left) / 2 - config.scanWidth / 2;
+    int offsetY = (rect.bottom - rect.top) / 2 - config.scanHeight / 2;
+    
+    // Player position (center of screen)
+    int playerX = config.scanWidth / 2;
+    int playerY = config.scanHeight / 2;
+    
+    // Target position
+    int targetX = target.centerX;
+    int targetY = target.centerY;
+    
+    // Calculate path points
+    vector<POINT> path = CalculatePathPoints(playerX, playerY, targetX, targetY);
+    
+    // Follow path dengan beberapa waypoints (untuk pathfinding yang lebih smooth)
+    // Skip beberapa waypoint untuk tidak terlalu lambat
+    int stepSize = max(1, (int)path.size() / 5);  // Max 5 waypoints
+    
+    for (size_t i = stepSize; i < path.size(); i += stepSize) {
+        POINT waypoint = path[i];
+        
+        // Convert to screen coordinates
+        int screenX = offsetX + waypoint.x;
+        int screenY = offsetY + waypoint.y;
+        
+        // Small movement towards waypoint (optional - bisa di-disable untuk langsung ke target)
+        // inputManager->Click(screenX, screenY);
+        // Sleep(50);
+    }
+    
+    // Final click pada target
+    int finalX = offsetX + targetX;
+    int finalY = offsetY + targetY;
+    inputManager->Click(finalX, finalY);
+}
+
+void MonsterFinderBot::DrawESPLines(HDC hdc, int offsetX, int offsetY) {
+    if (!config.showESPLines) return;
+    
+    // Player position (center of screen)
+    int playerX = config.scanWidth / 2;
+    int playerY = config.scanHeight / 2;
+    
+    // Get all alive monsters sorted by distance
+    vector<BoundingBox> aliveMonsters;
+    for (const auto& pair : trackedMonsters) {
+        if (pair.second.isAlive) {
+            aliveMonsters.push_back(pair.second);
+        }
+    }
+    
+    // Sort by distance (nearest first)
+    vector<BoundingBox> sortedMonsters = SortMonstersByDistance(aliveMonsters);
+    
+    // Draw ESP lines untuk maxESPLines terdekat
+    int lineCount = min(config.maxESPLines, (int)sortedMonsters.size());
+    
+    for (int i = 0; i < lineCount; i++) {
+        const BoundingBox& monster = sortedMonsters[i];
+        
+        // Skip current target (akan digambar terpisah)
+        if (isAttacking && monster.trackingID == currentTarget.trackingID) {
+            continue;
+        }
+        
+        // Get color berdasarkan priority
+        COLORREF lineColor = GetESPLineColor(monster, i);
+        
+        // Create pen untuk ESP line
+        HPEN hPen = CreatePen(PS_SOLID, 1, lineColor);
+        HPEN hOldPen = (HPEN)SelectObject(hdc, hPen);
+        
+        // Draw line dari player ke monster
+        MoveToEx(hdc, offsetX + playerX, offsetY + playerY, NULL);
+        LineTo(hdc, offsetX + monster.centerX, offsetY + monster.centerY);
+        
+        // Draw distance text
+        char distText[32];
+        sprintf_s(distText, sizeof(distText), "%.0f", monster.distToCenter);
+        SetTextColor(hdc, lineColor);
+        SetBkMode(hdc, TRANSPARENT);
+        TextOutA(hdc, offsetX + monster.centerX + 5, offsetY + monster.centerY - 15, distText, (int)strlen(distText));
+        
+        SelectObject(hdc, hOldPen);
+        DeleteObject(hPen);
+    }
+    
+    // Draw ESP line untuk current target dengan warna khusus
+    if (isAttacking && currentTarget.pixelCount > 0) {
+        HPEN hPen = CreatePen(PS_SOLID, 2, RGB(0, 255, 255));  // Cyan untuk current target
+        HPEN hOldPen = (HPEN)SelectObject(hdc, hPen);
+        
+        MoveToEx(hdc, offsetX + playerX, offsetY + playerY, NULL);
+        LineTo(hdc, offsetX + currentTarget.centerX, offsetY + currentTarget.centerY);
+        
+        // Draw arrow atau indicator di tengah line
+        int midX = (playerX + currentTarget.centerX) / 2;
+        int midY = (playerY + currentTarget.centerY) / 2;
+        
+        // Draw small circle di tengah sebagai indicator
+        HBRUSH hBrush = CreateSolidBrush(RGB(0, 255, 255));
+        HBRUSH hOldBrush = (HBRUSH)SelectObject(hdc, hBrush);
+        Ellipse(hdc, offsetX + midX - 3, offsetY + midY - 3, 
+                offsetX + midX + 3, offsetY + midY + 3);
+        
+        SelectObject(hdc, hOldBrush);
+        DeleteObject(hBrush);
+        SelectObject(hdc, hOldPen);
+        DeleteObject(hPen);
+    }
+}
+
 void MonsterFinderBot::DrawOverlay() {
-    if (!config.showBoxes) return;
+    if (!config.showBoxes && !config.showESPLines) return;
     
     HDC hdc = GetDC(gameWindow);
     if (!hdc) return;
@@ -1549,34 +1741,41 @@ void MonsterFinderBot::DrawOverlay() {
     int offsetX = (rect.right - rect.left) / 2 - config.scanWidth / 2;
     int offsetY = (rect.bottom - rect.top) / 2 - config.scanHeight / 2;
     
-    // Draw all tracked monsters (each monster has its own box)
-    for (const auto& pair : trackedMonsters) {
-        const BoundingBox& box = pair.second;
-        
-        // Skip if this is current target (will draw separately)
-        if (isAttacking && box.trackingID == currentTarget.trackingID) {
-            continue;
-        }
-        
-        // Draw box in red for detected monsters
-        // Box will follow monster movement automatically through tracking
-        DrawBoundingBox(hdc, box, RGB(255, 0, 0), offsetX, offsetY);
+    // Draw ESP lines FIRST (di belakang boxes)
+    if (config.showESPLines) {
+        DrawESPLines(hdc, offsetX, offsetY);
     }
     
-    // Draw current target box in yellow (on top, thicker)
-    if (isAttacking && currentTarget.pixelCount > 0) {
-        // Draw thicker box for current target
-        HPEN hPen = CreatePen(PS_SOLID, 3, RGB(255, 255, 0));
-        HPEN hOldPen = (HPEN)SelectObject(hdc, hPen);
-        HBRUSH hBrush = (HBRUSH)GetStockObject(HOLLOW_BRUSH);
-        HBRUSH hOldBrush = (HBRUSH)SelectObject(hdc, hBrush);
+    // Draw all tracked monsters (each monster has its own box)
+    if (config.showBoxes) {
+        for (const auto& pair : trackedMonsters) {
+            const BoundingBox& box = pair.second;
+            
+            // Skip if this is current target (will draw separately)
+            if (isAttacking && box.trackingID == currentTarget.trackingID) {
+                continue;
+            }
+            
+            // Draw box in red for detected monsters
+            // Box will follow monster movement automatically through tracking
+            DrawBoundingBox(hdc, box, RGB(255, 0, 0), offsetX, offsetY);
+        }
         
-        Rectangle(hdc, offsetX + currentTarget.minX, offsetY + currentTarget.minY, 
-                  offsetX + currentTarget.maxX, offsetY + currentTarget.maxY);
-        
-        SelectObject(hdc, hOldBrush);
-        SelectObject(hdc, hOldPen);
-        DeleteObject(hPen);
+        // Draw current target box in yellow (on top, thicker)
+        if (isAttacking && currentTarget.pixelCount > 0) {
+            // Draw thicker box for current target
+            HPEN hPen = CreatePen(PS_SOLID, 3, RGB(255, 255, 0));
+            HPEN hOldPen = (HPEN)SelectObject(hdc, hPen);
+            HBRUSH hBrush = (HBRUSH)GetStockObject(HOLLOW_BRUSH);
+            HBRUSH hOldBrush = (HBRUSH)SelectObject(hdc, hBrush);
+            
+            Rectangle(hdc, offsetX + currentTarget.minX, offsetY + currentTarget.minY, 
+                      offsetX + currentTarget.maxX, offsetY + currentTarget.maxY);
+            
+            SelectObject(hdc, hOldBrush);
+            SelectObject(hdc, hOldPen);
+            DeleteObject(hPen);
+        }
     }
     
     ReleaseDC(gameWindow, hdc);
