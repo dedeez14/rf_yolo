@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="MonsterFinder/MonsterFinder.vcxproj" Id="0e390a80-e281-4ba3-bcc6-4c2a1079849c" />
+</Solution>
