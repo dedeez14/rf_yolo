@@ -1319,10 +1319,9 @@ void MonsterFinderBot::BotLoop() {
                 }
             }
             
-            // Draw overlay (always draw to show all tracked monsters)
-            if (config.showOverlay) {
-                DrawOverlay();
-            }
+            // Draw overlay SELALU tampil ketika bot running
+            // ESP dan boxes selalu ditampilkan untuk memudahkan finding monster
+            DrawOverlay();  // Always draw, tidak perlu cek config.showOverlay
             
             lastUpdateTime = GetTickCount();
         }
@@ -1486,8 +1485,10 @@ void MonsterFinderBot::ScanAndTarget() {
             
             Sleep(ApplyRandomDelay(config.attackDelayMs));
             
-            // Attack (background, tidak mengganggu user)
+            // Attack dengan press "Spasi" (VK_SPACE)
+            // Pastikan selalu menggunakan Spasi untuk attack
             inputManager->KeyPress(VK_SPACE);
+            logger.Debug("Attacking with SPACE key");
             
             currentTarget = target;
             isAttacking = true;
@@ -1824,7 +1825,8 @@ void MonsterFinderBot::FollowESPPath(const BoundingBox& target) {
 }
 
 void MonsterFinderBot::DrawESPLines(HDC hdc, int offsetX, int offsetY) {
-    if (!config.showESPLines) return;
+    // ESP SELALU tampil ketika bot running (untuk memudahkan finding)
+    // Force enable ESP display
     
     // Player position (center of screen)
     int playerX = config.scanWidth / 2;
@@ -1841,29 +1843,32 @@ void MonsterFinderBot::DrawESPLines(HDC hdc, int offsetX, int offsetY) {
     // Sort by distance (nearest first)
     vector<BoundingBox> sortedMonsters = SortMonstersByDistance(aliveMonsters);
     
-    // Draw ESP lines untuk maxESPLines terdekat
-    int lineCount = min(config.maxESPLines, (int)sortedMonsters.size());
+    // Draw ESP lines untuk SEMUA monster (atau maxESPLines jika ada limit)
+    int lineCount = sortedMonsters.size();
+    if (config.maxESPLines > 0) {
+        lineCount = min(config.maxESPLines, (int)sortedMonsters.size());
+    }
     
     for (int i = 0; i < lineCount; i++) {
         const BoundingBox& monster = sortedMonsters[i];
         
-        // Skip current target (akan digambar terpisah)
+        // Skip current target (akan digambar terpisah dengan warna khusus)
         if (isAttacking && monster.trackingID == currentTarget.trackingID) {
             continue;
         }
         
-        // Get color berdasarkan priority
+        // Get color berdasarkan priority dan jarak
         COLORREF lineColor = GetESPLineColor(monster, i);
         
-        // Create pen untuk ESP line
-        HPEN hPen = CreatePen(PS_SOLID, 1, lineColor);
+        // Create pen untuk ESP line (lebih tebal untuk visibility)
+        HPEN hPen = CreatePen(PS_SOLID, 2, lineColor);
         HPEN hOldPen = (HPEN)SelectObject(hdc, hPen);
         
-        // Draw line dari player ke monster
+        // Draw line dari player (center) ke monster center
         MoveToEx(hdc, offsetX + playerX, offsetY + playerY, NULL);
         LineTo(hdc, offsetX + monster.centerX, offsetY + monster.centerY);
         
-        // Draw distance text
+        // Draw distance text di dekat monster
         char distText[32];
         sprintf_s(distText, sizeof(distText), "%.0f", monster.distToCenter);
         SetTextColor(hdc, lineColor);
@@ -1874,9 +1879,9 @@ void MonsterFinderBot::DrawESPLines(HDC hdc, int offsetX, int offsetY) {
         DeleteObject(hPen);
     }
     
-    // Draw ESP line untuk current target dengan warna khusus
+    // Draw ESP line untuk current target dengan warna CYAN (lebih mencolok)
     if (isAttacking && currentTarget.pixelCount > 0) {
-        HPEN hPen = CreatePen(PS_SOLID, 2, RGB(0, 255, 255));  // Cyan untuk current target
+        HPEN hPen = CreatePen(PS_SOLID, 3, RGB(0, 255, 255));  // Cyan, lebih tebal  // Cyan untuk current target
         HPEN hOldPen = (HPEN)SelectObject(hdc, hPen);
         
         MoveToEx(hdc, offsetX + playerX, offsetY + playerY, NULL);
@@ -1900,7 +1905,12 @@ void MonsterFinderBot::DrawESPLines(HDC hdc, int offsetX, int offsetY) {
 }
 
 void MonsterFinderBot::DrawOverlay() {
-    if (!config.showBoxes && !config.showESPLines) return;
+    // ESP dan boxes SELALU tampil ketika bot running (untuk memudahkan finding)
+    // Force enable display ketika bot running
+    bool forceShowESP = true;  // ESP selalu tampil
+    bool forceShowBoxes = true;  // Boxes selalu tampil untuk semua monster
+    
+    if (!forceShowESP && !forceShowBoxes && !config.showBoxes && !config.showESPLines) return;
     
     HDC hdc = GetDC(gameWindow);
     if (!hdc) return;
@@ -1910,29 +1920,42 @@ void MonsterFinderBot::DrawOverlay() {
     int offsetX = (rect.right - rect.left) / 2 - config.scanWidth / 2;
     int offsetY = (rect.bottom - rect.top) / 2 - config.scanHeight / 2;
     
-    // Draw ESP lines FIRST (di belakang boxes)
-    if (config.showESPLines) {
+    // Draw ESP lines FIRST (di belakang boxes) - SELALU TAMPIL
+    if (forceShowESP || config.showESPLines) {
         DrawESPLines(hdc, offsetX, offsetY);
     }
     
-    // Draw all tracked monsters (each monster has its own box)
-    if (config.showBoxes) {
+    // Draw ALL detected monsters dengan box (setiap monster memiliki box sendiri)
+    // Ini memudahkan finding monster
+    if (forceShowBoxes || config.showBoxes) {
+        // Draw semua tracked monsters (setiap monster memiliki box merah)
         for (const auto& pair : trackedMonsters) {
             const BoundingBox& box = pair.second;
             
-            // Skip if this is current target (will draw separately)
+            // Skip dead monsters
+            if (!box.isAlive) continue;
+            
+            // Skip if this is current target (will draw separately with yellow)
             if (isAttacking && box.trackingID == currentTarget.trackingID) {
                 continue;
             }
             
-            // Draw box in red for detected monsters
-            // Box will follow monster movement automatically through tracking
+            // Draw box in red for all detected monsters
+            // Box akan mengikuti pergerakan monster secara otomatis melalui tracking
             DrawBoundingBox(hdc, box, RGB(255, 0, 0), offsetX, offsetY);
+            
+            // Draw monster name di atas box (optional, untuk debug)
+            if (config.showDebugInfo && !box.monsterName.empty()) {
+                SetTextColor(hdc, RGB(255, 255, 255));
+                SetBkMode(hdc, TRANSPARENT);
+                TextOutA(hdc, offsetX + box.centerX - 20, offsetY + box.minY - 15, 
+                        box.monsterName.c_str(), (int)box.monsterName.length());
+            }
         }
         
-        // Draw current target box in yellow (on top, thicker)
+        // Draw current target box in yellow (on top, thicker) - target yang akan di-attack
         if (isAttacking && currentTarget.pixelCount > 0) {
-            // Draw thicker box for current target
+            // Draw thicker box for current target (yellow = target untuk attack)
             HPEN hPen = CreatePen(PS_SOLID, 3, RGB(255, 255, 0));
             HPEN hOldPen = (HPEN)SelectObject(hdc, hPen);
             HBRUSH hBrush = (HBRUSH)GetStockObject(HOLLOW_BRUSH);
@@ -1940,6 +1963,12 @@ void MonsterFinderBot::DrawOverlay() {
             
             Rectangle(hdc, offsetX + currentTarget.minX, offsetY + currentTarget.minY, 
                       offsetX + currentTarget.maxX, offsetY + currentTarget.maxY);
+            
+            // Draw "TARGET" text
+            SetTextColor(hdc, RGB(255, 255, 0));
+            SetBkMode(hdc, TRANSPARENT);
+            TextOutA(hdc, offsetX + currentTarget.centerX - 25, offsetY + currentTarget.minY - 15, 
+                    "TARGET", 6);
             
             SelectObject(hdc, hOldBrush);
             SelectObject(hdc, hOldPen);
