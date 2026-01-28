@@ -119,6 +119,13 @@ struct BotConfig {
     bool showESPLines;        // Show ESP lines from player to monsters
     bool enablePathfinding;   // Enable pathfinding following ESP lines
     int maxESPLines;          // Maximum ESP lines to show (prioritize nearest)
+    
+    // Detection (advanced)
+    bool debugDetection;      // Enable debug logging for detection
+    int scanQuality;          // Scan quality: 1=strict, 2=normal, 3=relaxed
+    int detectionSensitivity; // Detection sensitivity: 1=low, 2=medium, 3=high
+    bool adaptiveThresholds; // Auto-adjust thresholds based on conditions
+    int confidenceLevel;       // Detection confidence: 1-10
 };
 
 struct Statistics {
@@ -440,6 +447,7 @@ private:
     DWORD attackStartTime;
     DWORD lastLootTime;
     DWORD lastUpdateTime;
+    DWORD lastNoMonsterLogTime;  // Prevent spam logging
     
     thread botThread;
     mutex mutexLock;

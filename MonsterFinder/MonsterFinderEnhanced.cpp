@@ -520,6 +520,13 @@ void ConfigManager::ResetToDefaults() {
     config.showESPLines = true;      // Enable ESP lines by default
     config.enablePathfinding = true; // Enable pathfinding by default
     config.maxESPLines = 10;         // Show max 10 nearest monsters
+    
+    // Detection (advanced)
+    config.debugDetection = false;   // Disable debug by default (enable if needed)
+    config.scanQuality = 2;          // Normal scan quality
+    config.detectionSensitivity = 2; // Medium detection sensitivity
+    config.adaptiveThresholds = false; // Disable by default
+    config.confidenceLevel = 5;      // Medium confidence
 }
 
 void ConfigManager::LoadConfig(const string& path) {
@@ -544,8 +551,29 @@ void ConfigManager::LoadConfig(const string& path) {
         // Parse simple key-value pairs
         if (key == "scanWidth") config.scanWidth = stoi(value);
         else if (key == "scanHeight") config.scanHeight = stoi(value);
-        else if (key == "autoLoot") config.autoLoot = (value == "1");
+        else if (key == "minBoxSize") config.minBoxSize = stoi(value);
+        else if (key == "mergeDistance") config.mergeDistance = stoi(value);
+        else if (key == "playerSafeRadius") config.playerSafeRadius = stoi(value);
+        else if (key == "motionThreshold") config.motionThreshold = stoi(value);
+        else if (key == "autoLoot") config.autoLoot = (value == "1" || value == "true");
         else if (key == "autoLootIntervalMs") config.autoLootIntervalMs = stoi(value);
+        else if (key == "showBoxes") config.showBoxes = (value == "1" || value == "true");
+        else if (key == "showOverlay") config.showOverlay = (value == "1" || value == "true");
+        else if (key == "showDebugInfo") config.showDebugInfo = (value == "1" || value == "true");
+        else if (key == "showESPLines") config.showESPLines = (value == "1" || value == "true");
+        else if (key == "enablePathfinding") config.enablePathfinding = (value == "1" || value == "true");
+        else if (key == "maxESPLines") config.maxESPLines = stoi(value);
+        else if (key == "targetMode") config.targetMode = value;
+        else if (key == "debugDetection") config.debugDetection = (value == "1" || value == "true");
+        else if (key == "scanQuality") config.scanQuality = stoi(value);
+        else if (key == "detectionSensitivity") config.detectionSensitivity = stoi(value);
+        else if (key == "adaptiveThresholds") config.adaptiveThresholds = (value == "1" || value == "true");
+        else if (key == "confidenceLevel") config.confidenceLevel = stoi(value);
+        else if (key == "maxAttackTime") config.maxAttackTime = stoi(value);
+        else if (key == "attackCooldownMs") config.attackCooldownMs = stoi(value);
+        else if (key == "autoSkill") config.autoSkill = (value == "1" || value == "true");
+        else if (key == "chainAttack") config.chainAttack = (value == "1" || value == "true");
+        else if (key == "onlyAggressive") config.onlyAggressive = (value == "1" || value == "true");
         // ... add more config parsing as needed
     }
     
@@ -922,6 +950,7 @@ MonsterFinderBot::MonsterFinderBot() {
     lastLootTime = 0;
     lastUpdateTime = 0;
     lastScanTime = 0;
+    lastNoMonsterLogTime = 0;
     nextTrackingID = 1;
     detectedBoxes.clear();
     trackedMonsters.clear();
@@ -1158,6 +1187,15 @@ void MonsterFinderBot::BotLoop() {
                     }
                 }
                 
+                // Debug log jika ada deteksi baru
+                if (config.debugDetection && !validBoxes.empty()) {
+                    char debugMsg[256];
+                    sprintf_s(debugMsg, sizeof(debugMsg), 
+                        "[SCAN] Found %zu valid boxes, %zu tracked monsters alive",
+                        validBoxes.size(), detectedBoxes.size());
+                    logger.Debug(debugMsg);
+                }
+                
                 lastScanTime = currentTime;
             }
             
@@ -1165,8 +1203,16 @@ void MonsterFinderBot::BotLoop() {
             if (isAttacking) {
                 AttackTarget();
             } else {
-                // When not attacking, always try to find new target
-                ScanAndTarget();
+                // When not attacking, try to find new target
+                // Add small delay untuk tidak spam scan jika tidak ada monster
+                static DWORD lastScanAttempt = 0;
+                DWORD currentTime = GetTickCount();
+                
+                // Coba scan setiap 150ms saat idle (lebih lambat dari scan interval)
+                if (currentTime - lastScanAttempt > 150) {
+                    ScanAndTarget();
+                    lastScanAttempt = currentTime;
+                }
             }
             
             // Draw overlay (always draw to show all tracked monsters)
@@ -1272,8 +1318,12 @@ void MonsterFinderBot::RemoveDeadMonsters() {
 }
 
 void MonsterFinderBot::ScanAndTarget() {
-    // Wait a bit for scan to complete if needed
-    // Select target from tracked monsters
+    DWORD currentTime = GetTickCount();
+    
+    // Prevent spam logging - hanya log setiap 2 detik jika tidak ada monster
+    bool shouldLog = (currentTime - lastNoMonsterLogTime > 2000);
+    
+    // Select target from tracked monsters (yang sudah di-update oleh BotLoop)
     if (!detectedBoxes.empty()) {
         // Filter out dead monsters
         vector<BoundingBox> aliveBoxes;
@@ -1288,6 +1338,9 @@ void MonsterFinderBot::ScanAndTarget() {
         }
         
         if (!aliveBoxes.empty()) {
+            // Reset no-monster log time karena ada monster
+            lastNoMonsterLogTime = 0;
+            
             BoundingBox target = SelectTarget(aliveBoxes);
             
             // Find the tracked version to get tracking ID
@@ -1338,14 +1391,28 @@ void MonsterFinderBot::ScanAndTarget() {
             isAttacking = true;
             attackStartTime = GetTickCount();
             
-            logger.Info("Targeting: " + target.monsterName + " (ID: " + to_string(target.trackingID) + ")");
+            logger.Info("Targeting: " + target.monsterName + " (ID: " + to_string(target.trackingID) + 
+                       " | Dist: " + to_string((int)target.distToCenter) + ")");
         } else {
-            // No alive monsters found, wait for scan
-            logger.Debug("No alive monsters found, waiting for scan...");
+            // No alive monsters found - log hanya setiap 2 detik
+            if (shouldLog) {
+                logger.Debug("No alive monsters found in tracked list. Waiting for scan...");
+                lastNoMonsterLogTime = currentTime;
+            }
+            
+            // Small delay untuk tidak spam loop
+            Sleep(50);
         }
     } else {
-        // No detected boxes, wait for scan
-        logger.Debug("No monsters detected, scanning...");
+        // No detected boxes - log hanya setiap 2 detik
+        if (shouldLog) {
+            logger.Debug("No monsters detected. Scanning area... (Tracked: " + 
+                        to_string(trackedMonsters.size()) + ")");
+            lastNoMonsterLogTime = currentTime;
+        }
+        
+        // Small delay untuk tidak spam loop
+        Sleep(50);
     }
 }
 
