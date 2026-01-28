@@ -799,7 +799,7 @@ void Logger::Debug(const string& message) { Log(LOG_DEBUG, message); }
 // ==========================================
 
 InputManager::InputManager(HWND hwnd) 
-    : targetWindow(hwnd), clickDeviation(5), clickDelayMin(100), clickDelayMax(300), randomDelay(true) {}
+    : targetWindow(hwnd), clickDeviation(5), clickDelayMin(100), clickDelayMax(300), randomDelay(true), usePostMessage(true) {}
 
 void InputManager::SetClickDeviation(int deviation) { clickDeviation = deviation; }
 
@@ -824,21 +824,29 @@ int InputManager::GetRandomDeviation() {
     return 0;
 }
 
-void InputManager::Click(int x, int y) {
-    // Save current mouse position to restore later (tidak mengganggu user)
+void InputManager::ClickWithPostMessage(int x, int y) {
+    // Convert to client coordinates
+    POINT pt = { x, y };
+    LPARAM lParam = MAKELPARAM(pt.x, pt.y);
+    
+    // Send mouse messages directly to game window (background operation)
+    PostMessage(targetWindow, WM_LBUTTONDOWN, MK_LBUTTON, lParam);
+    Sleep(10);
+    PostMessage(targetWindow, WM_LBUTTONUP, 0, lParam);
+}
+
+void InputManager::ClickWithSendInput(int x, int y) {
+    // Save current mouse position to restore later
     POINT savedPos;
     GetCursorPos(&savedPos);
     
-    int deviation = GetRandomDeviation();
-    int targetX = x + deviation;
-    int targetY = y + deviation;
-    
-    POINT pt = { targetX, targetY };
+    // Convert to screen coordinates
+    POINT pt = { x, y };
     ClientToScreen(targetWindow, &pt);
     
-    INPUT inputs[4] = {};
+    INPUT inputs[3] = {};
     
-    // Move mouse to target (relative move untuk tidak mengganggu)
+    // Move mouse to target
     inputs[0].type = INPUT_MOUSE;
     inputs[0].mi.dx = (pt.x * 65535) / GetSystemMetrics(SM_CXSCREEN);
     inputs[0].mi.dy = (pt.y * 65535) / GetSystemMetrics(SM_CYSCREEN);
@@ -854,15 +862,47 @@ void InputManager::Click(int x, int y) {
     
     SendInput(3, inputs, sizeof(INPUT));
     
-    Sleep(GetRandomClickDelay());
-    
-    // Restore original mouse position (tidak mengganggu user)
+    // Restore original mouse position
     SetCursorPos(savedPos.x, savedPos.y);
 }
 
-void InputManager::KeyPress(WORD key) {
-    // Background operation: Send input tanpa mengambil focus dari user
-    // Gunakan SendInput dengan cara yang tidak mengganggu keyboard user
+void InputManager::Click(int x, int y) {
+    if (!targetWindow || !IsWindow(targetWindow)) {
+        return;
+    }
+    
+    int deviation = GetRandomDeviation();
+    int targetX = x + deviation;
+    int targetY = y + deviation;
+    
+    // Try PostMessage first (background, tidak mengganggu user)
+    if (usePostMessage) {
+        ClickWithPostMessage(targetX, targetY);
+    } else {
+        // Fallback to SendInput (requires window focus but restores mouse position)
+        ClickWithSendInput(targetX, targetY);
+    }
+    
+    Sleep(GetRandomClickDelay());
+}
+
+void InputManager::KeyPressWithPostMessage(WORD key) {
+    // Calculate scan code for the key
+    UINT scanCode = MapVirtualKey(key, MAPVK_VK_TO_VSC);
+    
+    // Build lParam for WM_KEYDOWN: repeat count, scan code, extended key, context, previous state, transition
+    LPARAM lParamDown = (LPARAM)(1 | (scanCode << 16));
+    LPARAM lParamUp = (LPARAM)(1 | (scanCode << 16) | (1 << 30) | (1 << 31));
+    
+    // Send key down
+    PostMessage(targetWindow, WM_KEYDOWN, key, lParamDown);
+    Sleep(10);
+    
+    // Send key up
+    PostMessage(targetWindow, WM_KEYUP, key, lParamUp);
+}
+
+void InputManager::KeyPressWithSendInput(WORD key) {
     INPUT inputs[2] = {};
     inputs[0].type = INPUT_KEYBOARD;
     inputs[0].ki.wVk = key;
@@ -871,9 +911,21 @@ void InputManager::KeyPress(WORD key) {
     inputs[1].ki.wVk = key;
     inputs[1].ki.dwFlags = KEYEVENTF_KEYUP;
     
-    // SendInput akan mengirim ke foreground window, tapi kita tidak mengambil focus
-    // User masih bisa menggunakan keyboard/mouse mereka
     SendInput(2, inputs, sizeof(INPUT));
+}
+
+void InputManager::KeyPress(WORD key) {
+    if (!targetWindow || !IsWindow(targetWindow)) {
+        return;
+    }
+    
+    // Try PostMessage first (background, tidak mengganggu user)
+    if (usePostMessage) {
+        KeyPressWithPostMessage(key);
+    } else {
+        // Fallback to SendInput (requires window focus)
+        KeyPressWithSendInput(key);
+    }
 }
 
 void InputManager::KeyDown(WORD key) {
@@ -1018,6 +1070,8 @@ bool MonsterFinderBot::Initialize(HWND hwnd) {
     config = configManager.GetConfig();
     scanner = new EnhancedScanner(hwnd, config.scanWidth, config.scanHeight);
     inputManager = new InputManager(hwnd);
+    // Enable PostMessage mode untuk background operation (tidak mengganggu user)
+    inputManager->SetUsePostMessage(true);
     
     // Load data
     monsterDB.LoadDefaultMonsters();
@@ -1374,8 +1428,12 @@ void MonsterFinderBot::ScanAndTarget() {
     bool shouldLog = (currentTime - lastNoMonsterLogTime > 2000);
     
     // AUTO TARGETING: Bot mencari monster sendiri tanpa perlu cursor diarahkan
+    // Bot scan area dan menemukan monster secara otomatis
     // Select target from tracked monsters (yang sudah di-update oleh BotLoop)
     if (!detectedBoxes.empty()) {
+        if (config.debugDetection && shouldLog) {
+            logger.Debug("Found " + to_string(detectedBoxes.size()) + " detected boxes, selecting target...");
+        }
         // Filter out dead monsters
         vector<BoundingBox> aliveBoxes;
         for (const auto& box : detectedBoxes) {

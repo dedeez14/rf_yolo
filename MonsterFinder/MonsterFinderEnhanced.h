@@ -383,6 +383,7 @@ private:
     int clickDelayMin;
     int clickDelayMax;
     bool randomDelay;
+    bool usePostMessage;  // Try PostMessage first for background operation
     
 public:
     InputManager(HWND hwnd);
@@ -390,6 +391,7 @@ public:
     void SetClickDeviation(int deviation);
     void SetClickDelay(int minMs, int maxMs);
     void SetRandomDelay(bool enabled);
+    void SetUsePostMessage(bool use) { usePostMessage = use; }
     
     void Click(int x, int y);
     void KeyPress(WORD key);
@@ -400,6 +402,10 @@ public:
 private:
     int GetRandomClickDelay();
     int GetRandomDeviation();
+    void ClickWithPostMessage(int x, int y);
+    void ClickWithSendInput(int x, int y);
+    void KeyPressWithPostMessage(WORD key);
+    void KeyPressWithSendInput(WORD key);
 };
 
 // ==========================================
