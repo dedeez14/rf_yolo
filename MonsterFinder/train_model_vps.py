@@ -33,17 +33,22 @@ def train_vps():
     base_dir = os.path.dirname(os.path.abspath(__file__))
     dataset_dir = os.path.join(base_dir, "dataset")
     
-    # Ensure dataset.yaml exists
+    # Force create/overwrite dataset.yaml with correct absolute paths
     yaml_path = os.path.join(dataset_dir, "dataset.yaml")
-    if not os.path.exists(yaml_path):
-        config = {
-            'path': dataset_dir,
-            'train': 'images',
-            'val': 'images',
-            'names': {0: 'monster'}
-        }
-        with open(yaml_path, 'w') as f:
-            yaml.dump(config, f)
+    
+    # Absolute path to images directory
+    images_dir = os.path.join(dataset_dir, "images")
+    
+    config = {
+        'path': dataset_dir,    # Base path
+        'train': 'images',      # Relative to path
+        'val': 'images',        # Relative to path
+        'names': {0: 'monster'}
+    }
+    
+    print(f"[INFO] Creating dataset.yaml with path: {dataset_dir}")
+    with open(yaml_path, 'w') as f:
+        yaml.dump(config, f)
             
     # Load model (Start with Nano or Small)
     # yolov8n.pt = Nano (Cepat)
