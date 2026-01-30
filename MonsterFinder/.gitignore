@@ -1,0 +1,22 @@
+# IGNORE EVERYTHING FIRST
+*
+!*/
+
+# ALLOW ONLY THESE (YOLO related)
+!data_collector.py
+!quick_labeler.py
+!train_model.py
+!train_model_vps.py
+!monster_detector_enhanced.py
+
+# ALLOW DATASET
+!dataset/
+!dataset/**
+
+# ALLOW MODELS (.pt files)
+!models/
+!models/**
+!*.pt
+
+# Git related
+!.gitignore
