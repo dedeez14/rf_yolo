@@ -1,5 +1,5 @@
 names:
   0: monster
-path: C:\projects\rf\helper\MonsterFinder\MonsterFinder\dataset
+path: /home/dede/rf_yolo/MonsterFinder/dataset
 train: images
 val: images
