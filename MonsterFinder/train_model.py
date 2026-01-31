@@ -16,7 +16,13 @@ def create_dataset_yaml():
         'train': 'images',
         'val': 'images',
         'names': {
-            0: 'monster'
+            0: 'Monster',
+            1: 'Character',
+            2: 'Loot',
+            3: 'UI_Chat',
+            4: 'UI_Map',
+            5: 'UI_Skill',
+            6: 'Ore/Mineral'
         }
     }
     

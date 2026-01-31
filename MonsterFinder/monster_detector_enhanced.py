@@ -31,8 +31,8 @@ YOLO_AVAILABLE = False
 try:
     from ultralytics import YOLO
     YOLO_AVAILABLE = True
-except:
-    print("[WARNING] ultralytics not installed. Using fallback mode.")
+except Exception as e:
+    print(f"[WARNING] YOLO Check Failed: {e}")
     print("Install with: pip install ultralytics")
 
 STOP_FLAG = False
@@ -66,21 +66,27 @@ class RFBot:
         if not YOLO_AVAILABLE:
             return False
         
-        model_path = os.path.join(os.path.dirname(__file__), "models", "monster_detector.pt")
+        # Priority 1: VPS/Training Output (models/monster_detector/weights/best.pt)
+        vps_model = os.path.join(os.path.dirname(__file__), "models", "monster_detector", "weights", "best.pt")
+        # Priority 2: Manual Copy (models/monster_detector.pt)
+        local_model = os.path.join(os.path.dirname(__file__), "models", "monster_detector.pt")
         
-        if os.path.exists(model_path):
-            print(f"[YOLO] Loading model: {model_path}")
-            try:
-                self.model = YOLO(model_path)
-                self.use_yolo = True
-                print("[YOLO] Model loaded successfully!")
-                return True
-            except Exception as e:
-                print(f"[YOLO] Failed to load model: {e}")
-                return False
+        if os.path.exists(vps_model):
+            model_path = vps_model
+            print(f"[YOLO] Loading VPS model: {model_path}")
+        elif os.path.exists(local_model):
+            model_path = local_model
+            print(f"[YOLO] Loading Local model: {model_path}")
         else:
-            print(f"[YOLO] Model not found: {model_path}")
-            print("[YOLO] Use data_collector.py and train_model.py first")
+            return False
+
+        try:
+            self.model = YOLO(model_path)
+            self.use_yolo = True
+            print("[YOLO] Model loaded successfully!")
+            return True
+        except Exception as e:
+            print(f"[YOLO] Failed to load model: {e}")
             return False
     
     def find_window(self):
@@ -141,12 +147,57 @@ class RFBot:
         except:
             return None
     
+    
+    # --- Background Input Methods ---
+    def get_client_coordinates(self, wx, wy):
+        """Convert Window-Relative (from GetWindowDC) to Client-Relative (for PostMessage)"""
+        screen_x = self.x + wx
+        screen_y = self.y + wy
+        try:
+            client_point = win32gui.ScreenToClient(self.hwnd, (screen_x, screen_y))
+            return client_point[0], client_point[1]
+        except:
+            return wx, wy # Fallback
+
+    def background_click(self, wx, wy):
+        cx, cy = self.get_client_coordinates(wx, wy)
+        lparam = win32api.MAKELONG(cx, cy)
+        win32gui.PostMessage(self.hwnd, win32con.WM_LBUTTONDOWN, win32con.MK_LBUTTON, lparam)
+        time.sleep(0.05)
+        win32gui.PostMessage(self.hwnd, win32con.WM_LBUTTONUP, 0, lparam)
+
+    def background_move(self, wx, wy):
+        cx, cy = self.get_client_coordinates(wx, wy)
+        lparam = win32api.MAKELONG(cx, cy)
+        win32gui.PostMessage(self.hwnd, win32con.WM_MOUSEMOVE, 0, lparam)
+
+    def background_press(self, key):
+        vk = 0
+        if key == 'space': vk = win32con.VK_SPACE
+        elif key == 'x': vk = ord('X')
+        
+        if vk:
+            win32gui.PostMessage(self.hwnd, win32con.WM_KEYDOWN, vk, 0)
+            time.sleep(0.05)
+            win32gui.PostMessage(self.hwnd, win32con.WM_KEYUP, vk, 0)
+
+    # --- Wrapper Methods ---
     def move(self, wx, wy):
-        pyautogui.moveTo(self.x + wx, self.y + wy)
+        # [FIX] Game usually requires PHYSICAL mouse move to show nameplate (Red bar)
+        # Virtual WM_MOUSEMOVE is not enough for UI triggers in most DirectX games.
+        # We must use pyautogui for movement to ensure 'check_red_at' works.
+        pyautogui.moveTo(self.x + wx, self.y + wy) 
+        # self.background_move(wx, wy) # Disabled: Doesn't trigger nameplate
     
     def click(self, wx, wy):
+        # Physical click is more reliable for target locking
         pyautogui.click(self.x + wx, self.y + wy)
-    
+        # self.background_click(wx, wy)
+
+    def press(self, key):
+        # Keyboard usually works fine in background
+        self.background_press(key)
+        
     def count_red(self, region):
         if region is None:
             return 0
@@ -157,9 +208,17 @@ class RFBot:
         """Detect monsters using YOLO"""
         if not self.use_yolo or self.model is None:
             return []
-        
+        if frame is None:
+            return []
+
+        # SAVE DEBUG FRAME (Once)
+        if not hasattr(self, 'debug_saved'):
+            cv2.imwrite("debug_view_bot.jpg", frame)
+            print("[DEBUG] Saved debug_view_bot.jpg - Check this image!")
+            self.debug_saved = True
+
         # Run inference
-        results = self.model(frame, verbose=False)
+        results = self.model(frame, verbose=False, conf=0.1)  # Force low conf
         
         detections = []
         cx = self.width // 2
@@ -206,54 +265,92 @@ class RFBot:
     
     def check_red_at(self, wx, wy):
         self.move(wx, wy)
-        time.sleep(0.08)
-        region = self.capture_region(max(0, wx-70), max(0, wy-80), 140, 60)
-        return self.count_red(region) > 30
-    
+        # Scan area lebih fokus (Nameplate biasanya di ATAS monster)
+        time.sleep(0.05)
+        
+        # Center (wx, wy)
+        # Scan width: 80 (wx-40 to wx+40)
+        # Scan height: 60 (wy-90 to wy-30) -> Asumsi nameplate di atas center body
+        x = max(0, wx - 40)
+        y = max(0, wy - 90)
+        region = self.capture_region(x, y, 80, 60)
+        
+        red_count = self.count_red(region)
+        # print(f"  [DEBUG] Red pixels at ({wx},{wy}): {red_count}") # Uncomment for deeper debug
+        
+        # Threshold 15 pixel (Nameplate bar tipis pun kena)
+        return red_count > 15
+
     def attack_target(self, wx, wy):
         global STOP_FLAG
         
+        # Initial Attack
         self.click(wx, wy)
         time.sleep(0.1)
-        pyautogui.press('space')
+        self.press('space')
         
         start = time.time()
         hits = 0
-        no_red = 0
+        missed_scans = 0
+        max_miss = 15  # Lebih sabar (tadi cuma 2)
         
         while not STOP_FLAG:
             now = time.time()
             
-            if now - start > 20:
+            # Timeout combat 30s
+            if now - start > 30:
+                print("  [TIMEOUT] Combat too long")
                 return False
             
-            pyautogui.press('space')
+            # Spam attack
+            self.press('space')
             hits += 1
-            time.sleep(0.3)
+            time.sleep(0.15)  # Lebih cepat spamnya
             
-            if hits % 2 == 0:
-                if not self.check_red_at(wx, wy):
-                    no_red += 1
-                    if no_red >= 2:
-                        print(f"  [KILLED] {hits} hits")
+            # Cek status monster setiap 3 hit (lebih responsif)
+            if hits % 3 == 0:
+                has_red = False
+                
+                # Scan di titik awal
+                if self.check_red_at(wx, wy):
+                    has_red = True
+                    missed_scans = 0 # Reset jika ketemu
+                
+                if not has_red:
+                    missed_scans += 1
+                    
+                    if missed_scans >= 3: # Cukup 3x miss (sekitar 1.5 detik)
+                        print(f"  [KILLED] Target lost/dead after {hits} hits")
                         return True
                 else:
-                    no_red = 0
+                    missed_scans = 0
         
         return False
     
     def do_loot(self, wx, wy):
         global STOP_FLAG
-        for dx in [-30, 0, 30]:
-            for dy in [-30, 0, 30]:
-                if STOP_FLAG:
-                    return
-                self.move(wx + dx, wy + dy)
-                time.sleep(0.02)
-                pyautogui.press('x')
-                time.sleep(0.02)
-                pyautogui.press('space')
-                time.sleep(0.02)
+        print("  [LOOTING] Fast loot...")
+        
+        # Center
+        self.move(wx, wy)
+        self.press('x') 
+        self.press('space')
+        
+        # Spiral offsets (Reduced count and sleep for speed)
+        offsets = [
+            (-30, 0), (30, 0), (0, -30), (0, 30),
+            (-30, -30), (30, -30), (-30, 30), (30, 30)
+        ]
+        
+        for dx, dy in offsets:
+            if STOP_FLAG: return
+            self.move(wx + dx, wy + dy)
+            self.press('x')
+            self.press('space')
+            time.sleep(0.01) # Ultra fast
+        
+        print("  [LOOTING] Done.") 
+        time.sleep(0.1)
     
     def draw_detection(self, x1, y1, x2, y2, conf):
         """Draw detection box on screen (optional overlay)"""
@@ -331,21 +428,25 @@ class RFBot:
                         # Draw box
                         self.draw_detection(det['x1'], det['y1'], det['x2'], det['y2'], det['conf'])
                         
-                        # Verify with red nameplate
-                        if self.check_red_at(det['cx'], det['cy']):
-                            print(f"\n[MONSTER] ({det['cx']}, {det['cy']}) conf={det['conf']:.2f}")
-                            
-                            if self.attack_target(det['cx'], det['cy']):
-                                self.kills += 1
-                                print(f"[KILLS] {self.kills}")
-                                self.do_loot(det['cx'], det['cy'])
-                                time.sleep(0.2)
-                            break
+                # Verify with red nameplate
+                x_check, y_check = det['cx'], det['cy']
+                if self.check_red_at(x_check, y_check):
+                    print(f"\n[MONSTER] ({x_check}, {y_check}) conf={det['conf']:.2f} dist={det['dist']:.1f}")
+                    
+                    if self.attack_target(x_check, y_check):
+                        self.kills += 1
+                        print(f"[KILLS] {self.kills}")
+                        self.do_loot(x_check, y_check)
+                        time.sleep(0.1)
+                    break
                 
                 else:
-                    # Fallback: Hover scan mode
-                    if frame_count % 100 == 0:
-                        print(f"[SCAN] Frame {frame_count} | Kills: {self.kills}")
+                    pass
+            
+            else:
+                # Fallback: Hover scan mode (Only if YOLO didn't run or disabled)
+                if frame_count % 100 == 0:
+                    print(f"[SCAN] Frame {frame_count} | Kills: {self.kills}")
                     
                     # Simple grid scan
                     for y in range(200, self.height - 200, 80):

@@ -39,16 +39,26 @@ def train_vps():
     # Absolute path to images directory
     images_dir = os.path.join(dataset_dir, "images")
     
-    config = {
-        'path': dataset_dir,    # Base path
-        'train': 'images',      # Relative to path
-        'val': 'images',        # Relative to path
-        'names': {0: 'monster'}
-    }
+    # 3. Buat dataset.yaml di lokasi absolut
+    yaml_content = f"""
+path: {base_dir}/dataset  # dataset root dir
+train: images  # train images (relative to 'path') 
+val: images  # val images (relative to 'path') 
+
+# Classes
+names:
+  0: Monster
+  1: Character
+  2: Loot
+  3: UI_Chat
+  4: UI_Map
+  5: UI_Skill
+  6: Ore/Mineral
+"""
     
     print(f"[INFO] Creating dataset.yaml with path: {dataset_dir}")
     with open(yaml_path, 'w') as f:
-        yaml.dump(config, f)
+        f.write(yaml_content)
             
     # Load model (Start with Nano or Small)
     # yolov8n.pt = Nano (Cepat)

@@ -46,7 +46,15 @@ class DataCollector:
         self.display = None
         
         # Classes
-        self.classes = ["monster"]  # Tambah class lain jika perlu
+        self.classes = {
+            0: "Monster",
+            1: "Character",
+            2: "Loot",
+            3: "UI_Chat",
+            4: "UI_Map",
+            5: "UI_Skill",
+            6: "Ore/Mineral"
+        }
         self.current_class = 0
     
     def find_window(self):
@@ -109,7 +117,7 @@ class DataCollector:
                 
                 if abs(x2 - x1) > 10 and abs(y2 - y1) > 10:
                     self.boxes.append(((x1, y1), (x2, y2), self.current_class))
-                    print(f"[BOX] Added: ({x1},{y1}) to ({x2},{y2}) - {self.classes[self.current_class]}")
+                    print(f"[BOX] Added: {self.classes[self.current_class]}")
                 
                 self.current_box = None
                 self.start_point = None
@@ -120,10 +128,20 @@ class DataCollector:
         
         self.display = self.screenshot.copy()
         
+        colors = [
+            (0, 0, 255),    # 0: Monster (Red)
+            (255, 0, 0),    # 1: Character (Blue)
+            (0, 255, 255),  # 2: Loot (Yellow)
+            (255, 255, 0),  # 3: Chat (Cyan)
+            (255, 0, 255),  # 4: Map (Magenta)
+            (0, 255, 0),    # 5: Skill (Green)
+            (128, 128, 128) # 6: Ore (Gray)
+        ]
+        
         # Draw saved boxes
         for box in self.boxes:
             (x1, y1), (x2, y2), cls = box
-            color = (0, 255, 0)  # Green
+            color = colors[cls] if cls < len(colors) else (255,255,255)
             cv2.rectangle(self.display, (x1, y1), (x2, y2), color, 2)
             cv2.putText(self.display, self.classes[cls], (x1, y1-5), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
@@ -131,13 +149,15 @@ class DataCollector:
         # Draw current box
         if self.current_box:
             (x1, y1), (x2, y2) = self.current_box
-            cv2.rectangle(self.display, (x1, y1), (x2, y2), (0, 255, 255), 2)
+            cv2.rectangle(self.display, (x1, y1), (x2, y2), (255, 255, 255), 1)
         
         # Draw instructions
-        cv2.putText(self.display, "F5=Capture | S=Save | C=Clear | R=Undo | ESC=Exit", 
+        cv2.putText(self.display, "F5=Capture | S=Save | 1-7=Switch Class | ESC=Exit", 
                    (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-        cv2.putText(self.display, f"Boxes: {len(self.boxes)} | Class: {self.classes[self.current_class]}", 
-                   (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        
+        current_color = colors[self.current_class] if self.current_class < len(colors) else (255,255,255)
+        status = f"ACTIVE: [{self.current_class}] {self.classes[self.current_class]}"
+        cv2.putText(self.display, status, (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.7, current_color, 2)
     
     def save_data(self):
         if self.screenshot is None or len(self.boxes) == 0:
